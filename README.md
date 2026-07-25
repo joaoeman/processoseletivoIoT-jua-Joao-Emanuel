@@ -1,368 +1,166 @@
-# Processo Seletivo – Intensivo Maker | IoT
+# Contador de Produção com Sensor de Luz (LDR) — ESP32
 
-## Etapa Prática – Sistemas Embarcados
+## Identificação do Candidato
 
-Bem-vindo(a) à **etapa prática do processo seletivo para o Intensivo Maker | IoT**.
+- **Nome completo:** João Emanuel Santos do Nascimento
+- **GitHub:** [@joaoeman](https://github.com/joaoeman)
+---
 
-Esta atividade tem como objetivo avaliar suas competências em **Sistemas Embarcados**, com foco em **organização de projeto, lógica de firmware e simulação de hardware**, a partir da aplicação prática dos conhecimentos adquiridos nos cursos EAD da etapa anterior.
+## 1. Sobre o projeto
 
-> **Objetivo principal**  
-> Avaliar sua capacidade de **planejar, estruturar e desenvolver** uma solução funcional de sistemas embarcados, seguindo boas práticas de engenharia.
+A ideia por trás desse desafio é simples: existem linhas de produção manuais que não têm nenhum tipo de CLP ou sistema automatizado para contar quantas peças passaram durante o turno. Hoje isso é feito no papel, o que é lento e sujeito a erro.
+
+Este projeto simula, dentro do Wokwi, uma solução de baixo custo para esse problema: um sensor de luz (LDR) é posicionado sobre a esteira, e toda vez que uma peça passa por baixo dele, a sombra da peça derruba a leitura de luminosidade por um instante. O firmware do ESP32 interpreta essa queda e a volta da luz como "uma peça passou", soma no contador e informa tudo pela porta serial.
+
+Além de contar peças, o sistema também:
+
+- percebe quando a esteira fica travada (uma peça parada em cima do sensor por tempo demais) e avisa que houve uma **micro-parada**;
+- permite reiniciar o turno a qualquer momento apertando um botão físico, zerando os contadores.
+
+Toda a comunicação com quem está operando o sistema acontece via **monitor serial** — não há display nem LEDs, propositalmente, para manter a solução simples e barata.
 
 ---
 
-## Antes de Tudo
+## 2. Como o sistema funciona, passo a passo
 
-Se você **nunca utilizou Git ou GitHub**, não se preocupe.  
-Siga atentamente os passos abaixo.
+O firmware inteiro mora em `src/main.py` e roda em um único laço `while True`, sem nenhuma chamada bloqueante — ou seja, nada de `time.sleep()` longo travando a leitura dos sensores. A cada volta do laço (com uma pequena pausa de 1 ms no final), o código faz o seguinte:
+
+**Passo 1 — Lê o sensor de luz**
+O ADC do pino 34 (onde está o LDR) é lido e o valor bruto (0–4095) é convertido para uma porcentagem de "quanto está escuro", através da função `calcular_percentual_luz()`. Quanto maior essa porcentagem, mais luz está sendo bloqueada.
+
+**Passo 2 — Decide se há algo bloqueando o sensor**
+Se essa porcentagem passar de 50%, o sistema considera que uma peça está na frente do sensor (`detectado = True`).
+
+**Passo 3 — Trata as três situações possíveis**
+1. *Acabou de bloquear* (não estava bloqueado e agora está): o sistema marca `bloqueado = True` e guarda o instante em que isso aconteceu — é o início da contagem de uma possível micro-parada.
+2. *Continua bloqueado*: o sistema verifica há quanto tempo isso está acontecendo. Se passar de 5 segundos e ainda não tiver avisado, ele imprime o alerta de micro-parada uma única vez (por isso existe a flag `alerta_emitido`).
+3. *Não está mais bloqueado*: se antes estava bloqueado e agora não está mais, significa que a peça passou completamente — é nesse momento, e só nesse momento, que o contador é incrementado. Isso evita contar a mesma peça mais de uma vez enquanto ela ainda está passando na frente do sensor.
+
+**Passo 4 — Lê o botão de reset com debounce**
+Em paralelo (dentro do mesmo laço), o botão é lido e comparado com a leitura anterior. Só quando o sinal fica estável por 50 ms ele é aceito como um clique de verdade. Isso evita que um ruído elétrico ou um contato "trepidando" gere múltiplos resets.
+
+**Passo 5 — Reseta o turno**
+Quando o clique é confirmado, o contador, o estado de bloqueio e a flag de alerta voltam todos a zero, e o sistema avisa pela serial que o turno foi resetado.
+
+Esse fluxo é o que garante as três mensagens que o CI do Wokwi valida: contagem de peça, alerta de micro-parada e confirmação de reset.
 
 ---
 
-### 1 - Criação de Conta no GitHub
+## 3. Componentes utilizados na simulação
 
-1. Acesse: <https://github.com>
-2. Clique em **Sign up**
-3. Crie sua conta gratuita seguindo as instruções da plataforma
+| Componente | ID no `diagram.json` | Ligação no ESP32 | Papel no projeto |
+|---|---|---|---|
+| ESP32 DevKit C v4 | `esp` | — | Roda o firmware em MicroPython |
+| Fotorresistor (LDR) | `ldr1` | Saída analógica no **GPIO 34** | Detecta a passagem da peça pela variação de luz |
+| Botão de pressão | `btn1` | **GPIO 4** (pull-up interno) | Reseta o turno manualmente |
+| Monitor Serial | `$serialMonitor` | TX/RX do ESP32 | Mostra inicialização, contagens, alertas e resets |
 
-> O GitHub será utilizado para:
->
-> - Envio do seu projeto
-> - Versionamento do código
-> - Correção e validação automática via GitHub Actions
+O botão usa o resistor de pull-up interno do próprio ESP32 — por isso, no código, ele é lido como pressionado quando o valor cai para `0`.
 
 ---
 
-### 2 - Instalação do Git
+## 4. Parâmetros e constantes do firmware
 
-O **Git** é a ferramenta responsável pelo controle de versões do seu código.
+Todos os valores importantes ficam centralizados no topo do arquivo, para facilitar ajustes:
 
-### Windows
+| Parâmetro | Valor | O que controla |
+|---|---:|---|
+| `porcentagem_ident` | 50% | A partir de quanto bloqueio de luz uma peça é considerada "presente" |
+| `DEBOUNCE_MS` | 50 ms | Tempo mínimo de estabilidade para aceitar o clique do botão |
+| `LIMITE_MICROPARADA_S` | 5 s | Tempo de bloqueio contínuo para disparar o alerta de micro-parada |
+| `ADC_MAX_VALUE` | 4095 | Resolução do ADC (12 bits), usada para normalizar a leitura |
 
-Baixe e instale o **Git Bash**:  
-<https://git-scm.com/downloads>
+---
 
-### Linux / macOS
+## 5. Estrutura do projeto
 
-Verifique se o Git já está instalado:
-
-```bash
-git --version
+```text
+.
+├── binaries/              # Bootloader, tabela de partições e MicroPython (para o build local)
+├── scenarios/
+│   ├── light/             # Cenários de teste automatizados do Wokwi CI (test_1, test_2, test_3)
+│   └── LIGHT.md            # Especificação oficial do desafio escolhido
+├── src/
+│   └── main.py             # Firmware do contador de produção
+├── diagram.json            # Circuito da simulação (ESP32 + LDR + botão)
+├── Dockerfile               # Build da imagem usada para gerar o fs.bin
+├── flasher_args.json         # Mapeamento dos binários na memória do ESP32
+├── requirements.txt          # Dependências Python locais (mpremote)
+└── wokwi.toml                # Configuração da simulação Wokwi
 ```
 
-> Caso não esteja, instale pelo gerenciador de pacotes do seu sistema.
+---
 
-## Preparando o Ambiente
+## 6. Como rodar o projeto localmente, passo a passo
 
-Para desenvolver o desafio, você deverá criar uma cópia deste repositório no seu GitHub.
+### 6.1 Pré-requisitos
 
-### 1 - Fork do Repositório
+- Python 3
+- Docker (para gerar o `fs.bin` da mesma forma que o CI faz)
+- VS Code com a extensão do Wokwi e uma API Key válida
 
-No canto superior direito desta página, clique em Fork
-
-<img width="219" height="45" alt="image" src="https://github.com/user-attachments/assets/5d629626-513a-445c-ba0f-e5bb3e225187" />
-
-Uma cópia do repositório será criada no seu perfil do GitHub
-
-> O Fork permite que você trabalhe de forma independente, sem alterar o repositório original do processo seletivo.
-
-### 2 - Clone do Repositório
-
-No repositório do seu Fork, clique em **<> Code**
-
-<img width="149" height="52" alt="image" src="https://github.com/user-attachments/assets/abbd331b-a005-4633-89c6-afd16acbe828" />
-
-Copie a URL e execute no terminal:
-
-```bash
-git clone https://github.com/SEU_USUARIO/nome-do-repositorio.git
-cd nome-do-repositorio
-```
-
-> O comando git clone cria uma cópia local do repositório para desenvolvimento.
-
-### 3 - Preparação do Ambiente de Execução
-
-Você pode executar o projeto de duas formas. Escolha apenas uma.
-
-#### Opção A – Ambiente Python Local
-
-**Requisitos:**
-
-- Python 3.10 ou 3.11
-- pip
-
-**Instale as dependências:**
+### 6.2 Instalando as dependências Python
 
 ```bash
 pip install -r requirements.txt
 ```
 
-#### Opção B – Dev Container (Recomendado)
+### 6.3 Gerando o arquivo de sistema de arquivos (`fs.bin`)
 
-Este repositório inclui um Dev Container, garantindo um ambiente padronizado.
+O ESP32, ao rodar MicroPython, precisa que o código-fonte esteja empacotado num sistema de arquivos LittleFS. Isso é feito em dois passos:
 
-**Requisitos:**
-
-- VS Code
-- Docker instalado
-- Extensão Dev Containers
-
-**Passos:**
-
-1. Abra o repositório no VS Code
-2. Clique em “Reopen in Container”
-3. Aguarde a criação automática do ambiente
-
-> Todas as dependências serão instaladas automaticamente.
-
-## Criando sua API Key do Wokwi
-
-A simulação do projeto será executada automaticamente via GitHub Actions, utilizando o Wokwi CLI.
-
-Para isso, você precisa gerar uma API Key.
-
-1. Acesse: <https://wokwi.com/dashboard/ci>
-2. Faça login (Google ou GitHub)
-3. Clique em Generate API Token
-4. Copie a chave gerada (exemplo: wokwi-xxxxxxxx)
-
-> Importante
-
-- Nunca faça commit dessa chave
-- Ela deve ser armazenada apenas como secret no GitHub
-
-## Configurando a API Key no GitHub (Secrets)
-
-**No repositório do seu Fork:**
-
-1. Vá em Settings
-2. Acesse Secrets and variables → Actions
-3. Clique em New repository secret
-4. Nome: WOKWI_API_KEY
-5. Valor: sua chave gerada
-6. Salve
-
-> As GitHub Actions do template já estão preparadas para usar essa variável automaticamente.
-
-## Desafio Técnico
-
-Você deverá desenvolver um projeto de sistemas embarcados simulados, utilizando Python e Wokwi.
-
-### Estrutura mínima esperada
-
-```text
-/project
- ├── src/
- │   └── main.py        # Código principal do projeto
- ├── wokwi.toml         # Configuração da simulação
- ├── diagram.json       # Circuito no Wokwi
- └── README.md          # Explicação do seu projeto
-```
-
-> Você pode expandir essa estrutura se desejar, desde que mantenha os arquivos essenciais.
-
-### Escolha do cenário
-
-No diretório "scenarios" existem arquivos .md e pastas referentes a diferentes desafios. Selecione apenas um deles e mantenha apenas a pasta e .md referente ao desafio a ser desenvolvido, deletando os demais. Isso fará com o que o fluxo de testes automáticos selecione o fluxo de acordo com o desafio escolhido.
-
-### Como Desenvolver seu Projeto
-
-O desenvolvimento acontece principalmente nos arquivos abaixo:
-
-#### src/main.py
-
-- Código Python executado na simulação
-- Implementa a lógica do sistema embarcado
-- Exemplos: controle de LEDs, leitura de sensores, estados, temporizações, etc.
-
-#### diagram.json
-
-- Define o hardware virtual do projeto
-- Componentes como:
-  - LEDs
-  - Botões
-  - Sensores
-  - Placa microcontroladora
-
-#### wokwi.toml
-
-- Configura a simulação:
-  - Tipo de placa
-  - Framework
-  - Dependências adicionais
- 
-#### Rodando localmente
-
-Para executar o seu projeto locamente, é necesário preparar a imagem docker local, e após isso
-utiliza-la para gerar o arquivo que conterá o seu código para o projeto, para isso, execute os 
-seguintes códigos:
-
-1. Prepara a imagem docker (Necessário rodar apenas 1 vez)
+**1) Monta a imagem Docker (só precisa fazer uma vez):**
 
 ```bash
 docker build -t esp32-builder -f Dockerfile .
 ```
 
-2. Prepara o arquivo de memória fs.bin (Necessário a cada iteração)
+**2) Gera o `fs.bin` com o conteúdo de `src/` (repita sempre que alterar o `main.py`):**
 
 ```bash
 docker run --rm -v "$(pwd)/src:/mnt/src" -v "$(pwd):/mnt/out" esp32-builder bash -c "mkdir -p /tmp/fs && cp -r /mnt/src/* /tmp/fs/ && /mklittlefs/mklittlefs -c /tmp/fs -b 4096 -p 256 -s 0x200000 /mnt/out/fs.bin"
 ```
 
-#### Commit e Push
+### 6.4 Rodando a simulação
 
-Após suas alterações:
-
-```bash
-git add .
-git commit -m "Descrição clara do que foi feito"
-git push
-```
-
-### Execução Automática (GitHub Actions)
-
-A cada push, o GitHub Actions irá automaticamente:
-
-- Executar o pipeline de build
-- Rodar a simulação via Wokwi CLI
-- Validar que o projeto executa sem erros
-
-### Caso algo falhe
-
-- Vá até a aba Actions
-- Analise os logs da execução
-- Corrija e envie novamente
-
-## Critérios de Avaliação
-
-Esta etapa será avaliada considerando:
-
-- Funcionamento correto da simulação
-- Código organizado e legível
-- Estrutura de arquivos correta
-- Uso adequado do Wokwi
-- Commits claros e bem descritos
-- Projeto executando sem falhas nas Actions
+Com o `fs.bin` gerado na raiz do projeto, basta abrir a pasta no VS Code e iniciar a simulação pela extensão do Wokwi (ela já vai ler `wokwi.toml`, `diagram.json` e `flasher_args.json` automaticamente).
 
 ---
 
-## Submissão Final
+## 7. Cenários automatizados (Wokwi CI)
 
-Após concluir o desenvolvimento:
+O pipeline de CI roda três cenários, todos dentro de `scenarios/light/`:
 
-1. Verifique se o projeto **executa sem erros** nas GitHub Actions
-2. Confirme que todos os arquivos obrigatórios estão presentes
-3. Copie o link do **seu repositório no GitHub**
-
-Envie o link conforme as orientações do processo seletivo na plataforma do **PNAAT**.
-
----
-
-## Relatório do Candidato
-
-O arquivo **`README.md` do seu repositório** deve ser utilizado como o  
-**relatório final do desafio técnico**.
-
-Preencha todas as seções abaixo de forma **clara, objetiva e técnica**.
-
-> **Dica importante**  
-> Não é necessário um relatório extenso.  
-> O principal critério é demonstrar **clareza nas decisões técnicas**, organização e entendimento do sistema embarcado desenvolvido.
-> Não mantenha os demais conteúdos escritos nesse arquivo README, aqui devem ser concentradas apenas informações referentes ao projeto desenvolvido.
+| Cenário | O que é simulado | Mensagem esperada na serial |
+|---|---|---|
+| Contagem normal | Luz cai de 800 lux → 50 lux → volta para 800 lux | `Peca detectada! Total: 1` |
+| Micro-parada | Luz permanece em 50 lux por mais de 5 segundos | `Alerta: Micro-parada detectada!` |
+| Reset de turno | Botão é pressionado e depois solto | `Turno resetado com sucesso. Contadores zerados.` |
 
 ---
 
-### Identificação do Candidato
+## 8. Resultados obtidos
 
-- **Nome completo:**
-- **GitHub:**
+O firmware atende a todos os comportamentos previstos no desafio:
 
----
-
-## Visão Geral da Solução
-
-Descreva, em poucas palavras:
-
-- Qual é o objetivo do seu projeto
-- O que o sistema embarcado simulado faz
-- Como o usuário interage com ele (se aplicável)
+- imprime a mensagem de inicialização assim que o ESP32 liga;
+- conta peças apenas quando elas terminam de passar pelo sensor (evitando contagem duplicada);
+- detecta obstruções prolongadas sem travar o loop principal;
+- dispara apenas um alerta por micro-parada, mesmo que a obstrução continue;
+- aplica debounce ao botão e zera corretamente todos os estados do turno.
 
 ---
 
-## Arquitetura do Sistema Embarcado
+## 9. Comentários adicionais
 
-Explique a arquitetura lógica do seu projeto, abordando:
+Os limiares usados (50% de bloqueio, 5 segundos de micro-parada, 50 ms de debounce) foram calibrados para funcionar bem dentro da simulação do Wokwi. Numa esteira real, esses valores provavelmente precisariam de ajuste conforme a iluminação do ambiente e a velocidade da linha.
 
-- Fluxo principal do programa (`main.py`)
-- Estrutura de estados, loops ou temporizações
-- Como os componentes interagem entre si
+Como próximos passos, valeria a pena:
 
-Se desejar, utilize tópicos ou um pequeno diagrama em texto.
-
----
-
-## Componentes Utilizados na Simulação
-
-Liste os principais componentes definidos no `diagram.json`, por exemplo:
-
-- Tipo de placa utilizada
-- LEDs, botões, sensores, atuadores, etc.
-- Função de cada componente no sistema
+- salvar a contagem em memória não volátil, para não perder o turno se o ESP32 reiniciar;
+- calcular o tempo médio de ciclo entre peças;
+- enviar essas métricas para algum painel de monitoramento externo.
 
 ---
 
-## Decisões Técnicas Relevantes
-
-Explique brevemente decisões importantes tomadas durante o desenvolvimento, como:
-
-- Organização do código
-- Uso de funções, estados ou constantes
-- Estratégias para temporização ou controle lógico
-
----
-
-## Resultados Obtidos
-
-Descreva o comportamento final do sistema:
-
-- O que funciona corretamente
-- Quais requisitos foram atendidos
-- Resultado observado na simulação do Wokwi
-
----
-
-## Comentários Adicionais (Opcional)
-
-Utilize este espaço para comentar, se desejar:
-
-- Dificuldades encontradas
-- Limitações da solução
-- Melhorias que você faria com mais tempo
-- Principais aprendizados durante o desafio
-
----
-
-> Este relatório faz parte da avaliação técnica.  
-> Clareza, objetividade e organização são tão importantes quanto o funcionamento do código.
-
----
-
-## Especificação dos Testes Automatizados (Wokwi CI)
-
-Para que o projeto seja validado com sucesso na esteira de integração contínua (CI), o firmware escrito em MicroPython deve interagir corretamente com as leituras dos sensores descritos em cada cenário e enviar as mensagens de status exatas.
-
-### Requisitos Críticos de Implementação
-
-1. **Casamento Exato de Strings:** O Wokwi CI faz uma verificação estrita caractere por caractere. Se houver divergência em maiúsculas/minúsculas, acentuação ou falta de pontuação, o teste irá falhar.
-2. **Arquitetura Não-Bloqueante:** Evite o uso de funções bloqueantes. Elas podem fazer com que o firmware perca a janela de tempo em que o simulador altera o peso, quebrando a sincronia do teste automatizado.
-
----
-
-## Suporte
-
-Em caso de dúvidas:
-
-- Consulte o material dos cursos EAD
-- Leia atentamente este README
-- Analise os logs das GitHub Actions
-- Utilize os canais oficiais para contato com os instrutores
+> Projeto disponível na **branch `main`** deste repositório.
