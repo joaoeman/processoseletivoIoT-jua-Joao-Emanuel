@@ -69,7 +69,7 @@ while True:
         # O sinal ficou estavel por tempo suficiente, ent aceita como real
         if leitura_botao != botao_estado_estavel:
             botao_estado_estavel = leitura_botao
-            if botao_estado_estavel == 1:  # 0 = pressionado (PULL_UP)
+            if botao_estado_estavel == 1: 
                 counter = 0
                 bloqueado = False
                 alerta_emitido = False
